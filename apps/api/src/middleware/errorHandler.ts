@@ -67,19 +67,6 @@ export class AppError extends Error {
   }
 }
 
-export class CitasPendientesError extends AppError {
-  constructor(
-    public readonly totalCitas: number,
-    public readonly sedeOrigenId: string,
-    // 28-sep-2026: CUÁLES son (fecha, hora, sede). Sin esto recepción miraba los primeros días, no veía nada y no
-    // entendía el bloqueo (un movimiento sin fin revisa todas las citas futuras).
-    detalle?: string,
-  ) {
-    super(`La podóloga tiene ${totalCitas} cita(s) activa(s) que quedarían fuera de su nueva sede${detalle ? `: ${detalle}` : ''}. Muévelas a otra podóloga desde la agenda y luego confirma el movimiento.`, 409, 'CITAS_PENDIENTES');
-    this.name = 'CitasPendientesError';
-  }
-}
-
 export function errorHandler(
   err: Error,
   _req: Request,
@@ -99,7 +86,7 @@ export function errorHandler(
     const statusCode = (err as any).statusCode || 400;
     res.status(statusCode).json({
       error: (err as any).code || 'APP_ERROR',
-      message: err.message,
+      message: 'No se pudo completar la acción',
       statusCode,
     });
     return;

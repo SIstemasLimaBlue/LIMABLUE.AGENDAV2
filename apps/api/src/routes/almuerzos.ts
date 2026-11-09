@@ -95,17 +95,6 @@ router.post('/', requireAuth, requirePermiso('horarios.editar'), async (req, res
     throw new AppError('Profesional no encontrado', 404);
   }
 
-  if (profesional.tipo !== 'podologa' && profesional.tipo !== 'fisioterapeuta') {
-    throw new AppError('El almuerzo aplica solo a podólogas y fisioterapeutas.', 400);
-  }
-
-  if (profesional.tipo === 'fisioterapeuta') {
-    const sede = await prisma.sede.findUnique({ where: { id: sedeId }, select: { nombre: true } });
-    if (sede?.nombre !== NOMBRE_PAZ_SOLDAN) {
-      throw new AppError('Las fisioterapeutas solo están en Paz Soldán.', 400);
-    }
-  }
-
   const usuarioId = req.user?.userId;
   if (!usuarioId) throw new AppError('No autenticado', 401);
 
@@ -113,7 +102,7 @@ router.post('/', requireAuth, requirePermiso('horarios.editar'), async (req, res
     await crearAlmuerzo({ profesionalId, sedeId, horaInicio, creadoPor: usuarioId, fecha, esRecurrente });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Error al crear almuerzo';
-    if (err instanceof AppError) throw err; // p. ej. 409 CITAS_EN_RANGO con la lista de pacientes
+    if (err instanceof AppError) throw err;
     if (msg.includes('ya tiene un horario')) throw new AppError(msg, 409);
     if (msg.includes('no tiene asignación')) throw new AppError(msg, 422);
     throw new AppError(msg, 400);

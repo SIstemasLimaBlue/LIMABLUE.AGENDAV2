@@ -114,9 +114,6 @@ router.post('/admin', requireAuth, requireCoord, async (req, res) => {
   const activaHasta = new Date(data.activaHasta + 'T23:59:59');
   const now = new Date();
 
-  if (activaHasta <= now) {
-    throw new AppError('La fecha de vencimiento debe ser futura', 400, 'FECHA_PASADA');
-  }
 
   const notificacion = await prisma.notificacion.create({
     data: {
@@ -153,16 +150,10 @@ router.put('/admin/:id', requireAuth, requireCoord, async (req, res) => {
   if (!existing) throw new AppError('Notificación no encontrada', 404);
 
   const now = new Date();
-  if (existing.activaHasta < now) {
-    throw new AppError('No se puede editar una notificación ya vencida', 400, 'YA_VENCIDA');
-  }
 
   let activaHasta = existing.activaHasta;
   if (data.activaHasta) {
     activaHasta = new Date(data.activaHasta + 'T23:59:59');
-    if (activaHasta <= now) {
-      throw new AppError('La nueva fecha de vencimiento debe ser futura', 400, 'FECHA_PASADA');
-    }
   }
 
   await prisma.$transaction(async (tx) => {

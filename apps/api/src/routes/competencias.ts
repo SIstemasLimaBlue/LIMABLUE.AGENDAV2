@@ -77,9 +77,6 @@ router.post('/toggle', requireAuth, requirePermiso('competencias.editar'), async
     ]);
     const catProf = prof ? catDeTipo(prof.tipo) : null;
     const catServ = serv ? catDeUnidad(serv.unidadNegocio?.nombre ?? '') : null;
-    if (catProf && catServ && catProf !== catServ) {
-      throw new AppError('Ese servicio no corresponde al área del profesional (cruza categoría). El baro por solicitud se asigna desde Movimientos.', 400, 'CATEGORIA_INVALIDA');
-    }
   }
 
   const existing = await prisma.competenciaProfesional.findUnique({

@@ -147,9 +147,6 @@ router.post('/', requireAuth, requireAdmin, async (req, res) => {
   if (!srv || srv.deletedAt) throw new AppError('Servicio no encontrado', 404);
 
   // Validar que el extra no sea el mismo que el ancla
-  if (servicioAnclaId && servicioAnclaId === servicioExtraId) {
-    throw new AppError('El servicio ancla no puede ser su propio extra combinable', 400, 'ANCLA_NO_ES_EXTRA');
-  }
 
   // Verificar si ya existe un combinable activo para el mismo par ancla+extra
   const existente = await prisma.combinacionPermitida.findFirst({
@@ -159,7 +156,6 @@ router.post('/', requireAuth, requireAdmin, async (req, res) => {
       deletedAt: null,
     },
   });
-  if (existente?.activo) throw new AppError('Ese servicio ya está en la lista de combinables para esta ancla', 409, 'COMBINACION_DUPLICADA');
 
   const guardado = await prisma.$transaction(async (tx) => {
     const c = existente

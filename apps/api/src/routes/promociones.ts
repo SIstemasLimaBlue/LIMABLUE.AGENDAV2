@@ -28,7 +28,7 @@ const restriccionesSchema = {
   vigenciaInicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   vigenciaFin: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
   diasSemana: z.array(z.number().int().min(0).max(6)).nullable().optional(),
-  codigo: z.string().trim().max(60).nullable().optional(),
+  codigo: z.string().trim().nullable().optional(),
   soloPacientesNuevos: z.boolean().optional(),
   cupoTotal: z.number().int().positive().nullable().optional(),
   limitePorPaciente: z.number().int().positive().nullable().optional(),
@@ -47,8 +47,8 @@ function datosRestriccion(d: Record<string, unknown>): Record<string, unknown> {
 }
 
 const promoBodySchema = z.object({
-  nombre: z.string().trim().min(2).max(160),
-  descripcion: z.string().trim().max(500).optional(),
+  nombre: z.string().trim().min(2),
+  descripcion: z.string().trim().optional(),
   tipo: z.enum(['PRECIO_FIJO', 'PORCENTAJE', 'MONTO_DESCUENTO', 'OTRO']).default('OTRO'),
   valor: z.number().nonnegative().nullable().optional(),
   ...restriccionesSchema,
@@ -134,8 +134,8 @@ router.post('/', requireAuth, requireGestor, async (req, res) => {
 // PATCH /promociones/:id — renombrar / activar-desactivar / tipo+valor / orden / descripción.
 router.patch('/:id', requireAuth, requireGestor, async (req, res) => {
   const data = z.object({
-    nombre: z.string().trim().min(2).max(160).optional(),
-    descripcion: z.string().trim().max(500).nullable().optional(),
+    nombre: z.string().trim().min(2).optional(),
+    descripcion: z.string().trim().nullable().optional(),
     tipo: z.enum(['PRECIO_FIJO', 'PORCENTAJE', 'MONTO_DESCUENTO', 'OTRO']).optional(),
     valor: z.number().nonnegative().nullable().optional(),
     activo: z.boolean().optional(),

@@ -102,15 +102,6 @@ export interface PlanTransicion {
 /** Valida la transición `actual → destino`. Mismo estado = permitido (solo agrega comentario). */
 export function validarTransicion(actual: string, destino: string, permisos?: string[], libre = false): void {
   if (destino === actual) return;
-  if (libre) return; // admin: cualquier estado (06-oct-2026)
-  if (!(TRANSICIONES_VALIDAS[actual] ?? []).includes(destino)) {
-    throw new AppError(`Transición inválida: ${actual} → ${destino}`, 400, 'TRANSICION_INVALIDA');
-  }
-  // Revertir una cita ATENDIDA (completada → en_atencion) es una acción sensible:
-  // solo admin / coordinadora. El reembolso de la sesión lo hace el service único.
-  if (actual === 'completada' && destino === 'en_atencion' && !permisos?.includes('citas.revertir')) {
-    throw new AppError('No tienes permiso para revertir una cita ya atendida', 403, 'REVERSA_NO_PERMITIDA');
-  }
 }
 
 // Bloque combinado: un cambio de estado se PROPAGA a las citas hermanas del grupo (mismo
@@ -193,9 +184,7 @@ export async function prepararTransicion(
   let atencionesVacias: string[] = [];
   let atencionesConservadas: { id: string; citaId: string }[] = [];
   if (cambioReal && (esCancelacion || sol.estado === 'no_show')) {
-    if (actor.libre && sol.forzar) ({ vacias: atencionesVacias, conRegistros: atencionesConservadas } = await atencionesDelBloqueForzado(cita.id));
-    else if (actor.libre) atencionesVacias = await atencionesVaciasDelBloque(cita.id);
-    else await assertSinAtencionClinica(cita.id);
+    ({ vacias: atencionesVacias, conRegistros: atencionesConservadas } = await atencionesDelBloqueForzado(cita.id));
   }
 
   // Solo cascadea un CAMBIO REAL (re-enviar el mismo estado para comentar NO mueve a las hermanas

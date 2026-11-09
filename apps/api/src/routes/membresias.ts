@@ -50,16 +50,16 @@ async function datosPacienteContrato(pacienteId: string) {
 
 const itemSchema = z.object({
   servicioId: z.string().uuid(),
-  cantidad: z.number().int().min(1).max(50),
+  cantidad: z.number().int().min(1),
   // Subcategoría FIJADA en el constructor (opcional). Si se deja vacía y el servicio tiene
   // subcategorías activas, se elige al VENDER. Si se fija aquí, la venta la respeta.
   subcategoriaId: z.string().uuid().nullable().optional(),
 });
 
 const membresiaBodySchema = z.object({
-  nombre: z.string().trim().min(2).max(160),
-  descripcion: z.string().trim().max(500).optional(),
-  duracionMeses: z.number().int().min(1).max(36),
+  nombre: z.string().trim().min(2),
+  descripcion: z.string().trim().optional(),
+  duracionMeses: z.number().int().min(1),
   precio: z.number().nonnegative().nullable().optional(),
   sedesHabilitadas: z.array(z.string().uuid()).optional(), // vacío/undefined = todas
   composicion: z.array(itemSchema).min(1),

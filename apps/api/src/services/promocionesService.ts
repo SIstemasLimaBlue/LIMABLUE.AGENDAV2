@@ -220,15 +220,6 @@ export async function validarYCalcularPromo(
     return { descuento: 0, final: Math.max(0, Number(precioLista) || 0), tipo: p.tipo };
   }
 
-  if (!pasaRestriccionesEstaticas(p, ctx)) {
-    throw new AppError(`La promoción "${p.nombre}" no aplica para este servicio/sede/fecha/canal`, 409, 'PROMO_NO_APLICA');
-  }
-  if (!(await tieneCupo(p, ctx))) {
-    throw new AppError(`La promoción "${p.nombre}" ya no tiene cupo disponible`, 409, 'PROMO_SIN_CUPO');
-  }
-  if (p.codigo && (codigo ?? '').trim().toUpperCase() !== p.codigo.trim().toUpperCase()) {
-    throw new AppError(`La promoción "${p.nombre}" requiere un código válido`, 409, 'PROMO_CODIGO_INVALIDO');
-  }
 
   const { descuento, final } = calcularMontoFinal(precioLista, p.tipo, p.valor != null ? Number(p.valor) : null);
   return { descuento, final, tipo: p.tipo };
@@ -254,8 +245,5 @@ export async function recalcularPromoTrasCambio(
   })) as unknown as PromoRow | null;
   if (!p) throw new AppError('La promoción de la cita ya no existe: quítala antes de cambiar el tratamiento', 409, 'PROMO_INVALIDA');
   if (!(TIPOS_DESCUENTO as unknown as string[]).includes(p.tipo)) return { descuento: 0, final: Math.max(0, Number(precioLista) || 0) };
-  if (!pasaRestriccionesEstaticas(p, ctx)) {
-    throw new AppError(`La promoción "${p.nombre}" no aplica al nuevo tratamiento: quita o cambia la promoción primero`, 409, 'PROMO_NO_APLICA');
-  }
   return calcularMontoFinal(precioLista, p.tipo, p.valor != null ? Number(p.valor) : null);
 }

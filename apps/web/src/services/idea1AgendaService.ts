@@ -902,7 +902,7 @@ export function useIdea1AgendaData() {
   // (140px), de modo que quepan más columnas sin apilarse y con menos scroll horizontal.
   const isMobileGrid = containerWidth < 768;
   const gridTemplateColsCss = calcularGridTemplateColsCss(doctores.length, {
-    maxVisible: 6,
+    maxVisible: Number.MAX_SAFE_INTEGER,
     timeColPx: isMobileGrid ? 56 : 80,
     minDoctorColPx: isMobileGrid ? 140 : 180,
     // Ancho medido del área visible de la agenda → 6 columnas llenan la pantalla; el resto, scroll.

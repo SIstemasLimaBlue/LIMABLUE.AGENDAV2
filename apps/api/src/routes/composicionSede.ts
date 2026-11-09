@@ -264,13 +264,13 @@ async function haySolape(campo: 'profesionalId' | 'recepcionistaId', personaId: 
 // Valida cuerpo + reglas comunes; devuelve el campo/persona resueltos.
 async function validarAsignacion(data: z.infer<typeof asignacionSchema>): Promise<{ campo: 'profesionalId' | 'recepcionistaId'; personaId: string }> {
   const tieneProf = !!data.profesionalId, tieneRec = !!data.recepcionistaId;
-  if (tieneProf === tieneRec) throw new AppError('Asigna exactamente un doctor O una recepcionista', 400, 'PERSONA_INVALIDA');
+  if (!tieneProf && !tieneRec) throw new AppError('Indica un doctor o una recepcionista', 400, 'PERSONA_INVALIDA');
   if (data.fechaFin && data.fechaFin < data.fechaInicio) throw new AppError('La fecha de fin no puede ser anterior a la de inicio', 400);
   const sede = await prisma.sede.findFirst({ where: { id: data.sedeId, deletedAt: null } });
   if (!sede) throw new AppError('Sede no encontrada', 404);
   if (tieneProf) {
-    const p = await prisma.profesional.findFirst({ where: { id: data.profesionalId!, tipo: 'medico', activo: true, deletedAt: null }, select: { nombres: true, apellidos: true } });
-    if (!p || esMaquinaBaro(p.nombres, p.apellidos)) throw new AppError('Doctor no válido (debe ser un médico, no una máquina de baro)', 400, 'DOCTOR_INVALIDO');
+    const p = await prisma.profesional.findFirst({ where: { id: data.profesionalId!, deletedAt: null }, select: { nombres: true, apellidos: true } });
+    if (!p) throw new AppError('Profesional no encontrado', 404);
     return { campo: 'profesionalId', personaId: data.profesionalId! };
   }
   const r = await prisma.recepcionista.findFirst({ where: { id: data.recepcionistaId!, deletedAt: null } });

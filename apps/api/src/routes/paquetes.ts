@@ -118,7 +118,6 @@ router.post('/paciente/:pacienteId', requireAuth, requirePermiso('membresias.ven
 
   const paquete = await prisma.paquete.findUnique({ where: { id: data.paqueteId, deletedAt: null } });
   if (!paquete) throw new AppError('Plantilla de paquete no encontrada', 404);
-  if (!paquete.activo) throw new AppError('Este paquete ya no está a la venta', 409, 'PAQUETE_NO_VENDIBLE');
   if (data.origenGenexis && !data.sedeId) throw new AppError('Indica la sede (candado de sede)', 400, 'SEDE_REQUERIDA');
 
   // Control: no activar otro paquete del MISMO servicio si el existente aún tiene CUPO para
@@ -132,13 +131,6 @@ router.post('/paciente/:pacienteId', requireAuth, requirePermiso('membresias.ven
     },
   });
   const conCupo = activosMismoServicio.find(pp => pp.sesionesUsadas + pp.citas.length < pp.sesionesTotal);
-  if (conCupo) {
-    throw new AppError(
-      `El paciente ya tiene un paquete activo de «${conCupo.paquete.servicio.nombre}» («${conCupo.paquete.nombre}») con sesiones disponibles. Usa ese paquete; solo cuando se llene podrás activar otro.`,
-      409,
-      'PAQUETE_ACTIVO_DUPLICADO',
-    );
-  }
 
   const instancia = await prisma.$transaction(async (tx) => {
     const inst = await tx.paquetePaciente.create({

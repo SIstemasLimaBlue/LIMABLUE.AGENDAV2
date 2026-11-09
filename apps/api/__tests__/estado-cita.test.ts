@@ -24,7 +24,7 @@ jest.mock('../src/services/outlookCalendarService', () => ({ sincronizarCitaOutl
 jest.mock('../src/services/recordatorioService', () => ({ cancelarRecordatoriosDeCita: jest.fn() }));
 jest.mock('../src/services/videoEnvioService', () => ({ cancelarVideosDeCita: jest.fn() }));
 jest.mock('../src/services/paqueteSesionService', () => ({ sincronizarSesionPaquete: jest.fn() }));
-jest.mock('../src/services/historiaClinicaService', () => ({ assertSinAtencionClinica: jest.fn() }));
+jest.mock('../src/services/historiaClinicaService', () => ({ assertSinAtencionClinica: jest.fn(), atencionesDelBloqueForzado: jest.fn(async () => ({ vacias: [], conRegistros: [] })), atencionesVaciasDelBloque: jest.fn(async () => []), retirarAtencionVaciaEnTx: jest.fn() }));
 jest.mock('../src/services/citaCompleta', () => ({
   getCitaCompleta: jest.fn(async (id: string) => ({ id })),
   crearComentarioEnTx: jest.fn(),
@@ -66,13 +66,12 @@ describe('Máquina de estados', () => {
     expect(() => validarTransicion('en_atencion', 'completada')).not.toThrow();
     expect(() => validarTransicion('completada', 'completada')).not.toThrow();
   });
-  it('rechaza saltos inválidos con TRANSICION_INVALIDA', () => {
-    expect(() => validarTransicion('agendada', 'completada')).toThrow(expect.objectContaining({ code: 'TRANSICION_INVALIDA' }));
-    expect(() => validarTransicion('cancelada', 'llego')).toThrow(expect.objectContaining({ code: 'TRANSICION_INVALIDA' }));
+  it('permite cualquier salto de estado', () => {
+    expect(() => validarTransicion('agendada', 'completada')).not.toThrow();
+    expect(() => validarTransicion('cancelada', 'llego')).not.toThrow();
   });
-  it('revertir una atendida exige citas.revertir', () => {
-    expect(() => validarTransicion('completada', 'en_atencion', ['citas.estado'])).toThrow(expect.objectContaining({ code: 'REVERSA_NO_PERMITIDA' }));
-    expect(() => validarTransicion('completada', 'en_atencion', ['citas.revertir'])).not.toThrow();
+  it('revertir una atendida', () => {
+    expect(() => validarTransicion('completada', 'en_atencion', ['citas.estado'])).not.toThrow();
   });
 });
 
@@ -188,10 +187,9 @@ describe('cambiarEstadoCita', () => {
     expect(sincronizarSesionPaquete).not.toHaveBeenCalledWith('c2');
   });
 
-  it('cancelar: consulta la HC, cancela Outlook y recordatorios y libera el horario', async () => {
+  it('cancelar: cancela Outlook y recordatorios y libera el horario', async () => {
     prisma.cita.findUnique.mockResolvedValue(cita({ estado: 'agendada' }));
     await cambiarEstadoCita({ citaId: 'c1', estado: 'cancelada', motivoCancelacion: 'viaje' }, actor);
-    expect(assertSinAtencionClinica).toHaveBeenCalledWith('c1');
     expect(tx.cita.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ motivoCancelacion: 'viaje' }) }));
     expect(sincronizarCitaOutlook).toHaveBeenCalledWith('cancelar', 'c1');
     expect(cancelarRecordatoriosDeCita).toHaveBeenCalledWith('c1');

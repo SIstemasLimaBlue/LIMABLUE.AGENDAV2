@@ -43,7 +43,7 @@ router.get('/', requireAuth, async (req, res) => {
 // tipo, subcategorias_servicio.reservaOnline + precioOnline. Precio vacío = se usa el referencial. Lo que se ve en el
 // catálogo público sale de reservaWebService.catalogo(): aquí se marca cuáles de verdad se ofrecen y, si no, por qué.
 // (Va antes de `/:id` para que «reserva-web» no se tome como un id.)
-const precioWeb = z.number().positive('El precio debe ser mayor que 0').max(100000).nullable();
+const precioWeb = z.number().positive('El precio debe ser mayor que 0').nullable();
 const aNum = (v: unknown) => (v == null ? null : Number(v));
 
 // 30-oct-2026: cada sede puede tener su propio precio web (servicio_precio_web_sede / subcategoria_precio_web_sede). Sin precio
@@ -246,7 +246,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 });
 
 const servicioSchema = z.object({
-  nombre: z.string().min(3),
+  nombre: z.string().min(1),
   codigo: z.string().min(2).optional(), // se genera automáticamente (PREFIJO-NN por unidad)
   duracionMinutos: z.number().int().positive(),
   color: z.string().default('#6B7F9E'),
@@ -254,7 +254,7 @@ const servicioSchema = z.object({
   unidadNegocioId: z.string().uuid(),
   activo: z.boolean().default(true),
   // 09-oct-2026: cuántas citas de este servicio pueden cruzarse a la vez en una sede (salas). null = sin límite.
-  cupoSimultaneo: z.number().int().min(1).max(50).nullable().optional(),
+  cupoSimultaneo: z.number().int().min(1).nullable().optional(),
 });
 
 // Prefijo de código según la unidad (consistente: POD-/BAR-/FIS-, o 3 letras del nombre).
@@ -314,7 +314,7 @@ router.patch('/:id', requireAuth, requirePermiso('servicios.editar'), async (req
 // Al agendar o vender/consumir membresías de un servicio con subcategorías activas,
 // elegir una es obligatorio (validado en citas.ts / membresias.ts). Soft-delete.
 const subcategoriaSchema = z.object({
-  nombre: z.string().trim().min(2).max(80),
+  nombre: z.string().trim().min(2),
   precioReferencial: z.number().positive().nullable().optional(),
   orden: z.number().int().min(0).optional(),
 });

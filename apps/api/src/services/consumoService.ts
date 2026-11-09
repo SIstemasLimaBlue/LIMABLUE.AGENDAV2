@@ -174,14 +174,6 @@ export async function validarCupoItemAlAgendar(
       ...(citaIdExcluir ? { NOT: { id: citaIdExcluir } } : {}),
     },
   });
-  if (agendadasItem >= saldoItem) {
-    const etiqueta = item.subcategoriaEtiqueta ? `${item.etiqueta} ${item.subcategoriaEtiqueta}` : item.etiqueta;
-    throw new AppError(
-      `La membresía ya tiene reservadas todas las sesiones de ${etiqueta} (${item.cantidad}/${item.cantidad}, contando citas agendadas). Anula o reprograma una para agendar otra.`,
-      409,
-      'ITEM_SIN_CUPO',
-    );
-  }
 }
 
 interface ConsumirCitaParams {
@@ -213,24 +205,8 @@ export async function consumirDeCita(params: ConsumirCitaParams) {
     });
     if (!pp) throw new AppError('Paquete no encontrado', 404);
     if (pp.pacienteId !== cita.pacienteId) throw new AppError('El paquete no es de este paciente', 400);
-    if (pp.sedeId !== cita.sedeId) {
-      throw new AppError(`El paquete de este paciente pertenece a ${pp.sede?.nombre ?? 'otra sede'}`, 409, 'PAQUETE_OTRA_SEDE');
-    }
     const comp = (pp.composicion as ItemComposicion[] | null) ?? [];
     const esItem = comp.some((i) => itemCoincide(i, cita.servicioId, cita.subcategoriaId));
-    if (!paqueteCorresponde(pp, cita.servicioId, cita.subcategoriaId)) {
-      throw new AppError('El servicio o la subcategoría de la cita no corresponde a este paquete', 409, 'SERVICIO_NO_CORRESPONDE');
-    }
-    // Vigencia validada contra la FECHA DE LA CITA (no solo "hoy"): la cita debe caer dentro
-    // de [vigenciaInicio, vigenciaFin] de la membresía/paquete para poder consumir.
-    const fechaCita = cita.fecha.toISOString().slice(0, 10);
-    if (pp.vigenciaInicio && fechaCita < pp.vigenciaInicio) {
-      throw new AppError(`La membresía inicia su vigencia el ${pp.vigenciaInicio}`, 409, 'PAQUETE_NO_VIGENTE');
-    }
-    if (pp.vigenciaFin && fechaCita > pp.vigenciaFin) {
-      await recalcularPaquete(tx, pp.id);
-      throw new AppError(`La membresía vence el ${pp.vigenciaFin}`, 409, 'PAQUETE_VENCIDO');
-    }
     const vivos = await tx.consumoSesion.count({ where: { paqueteId: pp.id, deletedAt: null } });
     if (vivos >= pp.sesionesTotal) throw new AppError('Paquete agotado: se cobra como venta normal', 409, 'PAQUETE_AGOTADO');
     if (esItem && comp.length > 0) {

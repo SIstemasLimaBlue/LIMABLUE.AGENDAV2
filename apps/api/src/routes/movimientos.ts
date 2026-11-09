@@ -5,7 +5,6 @@ import { prisma } from '../db';
 import { requireAuth, requirePermiso } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
 import { crearMovimiento, crearMovimientoEnTx, eliminarMovimientoEnTx, hallarPredecesor, previewMovimiento, notificarCambioMovimiento, MOTIVO_LABELS } from '../services/asignacionService';
-import { CitasPendientesError } from '../middleware/errorHandler';
 import { fechaDb } from '../utils/fechaLima';
 import { auditEnTx } from '../services/audit';
 import { addDays } from 'date-fns';
@@ -13,28 +12,6 @@ import { addDays } from 'date-fns';
 const router = Router();
 
 const motivoEnum = z.nativeEnum(MotivoMovimiento);
-
-// 05-oct-2026: cuando un movimiento no se puede acortar/eliminar por citas, el mensaje dice CUÁLES (fecha, hora,
-// paciente). Antes solo decía «hay N citas» y el panel de la pantalla (pensado para CAMBIAR de sede) las ocultaba
-// porque están en la misma sede → «no tiene citas» pero igual no dejaba guardar.
-const DIAS_CORTOS = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
-async function detalleCitasBloqueantes(where: { profesionalId: string; sedeId: string; fecha: { gt?: Date; gte?: Date; lte?: Date } }): Promise<{ total: number; texto: string; citas: { id: string; fecha: string; horaInicio: string; paciente: string }[] }> {
-  const filtro = { ...where, deletedAt: null, estado: { in: ['agendada', 'confirmada', 'llego', 'en_atencion'] as ('agendada' | 'confirmada' | 'llego' | 'en_atencion')[] } };
-  const [total, citas] = await Promise.all([
-    prisma.cita.count({ where: filtro }),
-    prisma.cita.findMany({
-      where: filtro, orderBy: [{ fecha: 'asc' }, { horaInicio: 'asc' }], take: 8,
-      select: { id: true, fecha: true, horaInicio: true, paciente: { select: { nombres: true, apellidoPaterno: true } } },
-    }),
-  ]);
-  const lista = citas.map((c) => {
-    const iso = c.fecha.toISOString().slice(0, 10);
-    const [y, m, d] = iso.split('-');
-    return { id: c.id, fecha: iso, horaInicio: c.horaInicio, paciente: `${c.paciente.nombres} ${c.paciente.apellidoPaterno}`.trim(), etiqueta: `${DIAS_CORTOS[c.fecha.getUTCDay()]} ${d}/${m}${y !== String(new Date().getFullYear()) ? `/${y}` : ''} ${c.horaInicio} · ${c.paciente.nombres} ${c.paciente.apellidoPaterno}` };
-  });
-  const texto = lista.map((c) => c.etiqueta).join('; ') + (total > lista.length ? ` y ${total - lista.length} más` : '');
-  return { total, texto, citas: lista.map(({ etiqueta: _e, ...c }) => c) };
-}
 
 const crearSchema = z.object({
   profesionalId: z.string().uuid(),
@@ -264,22 +241,12 @@ router.post('/', requireAuth, requirePermiso('movimientos.editar'), async (req, 
     });
     res.status(201).json(nueva);
   } catch (err) {
-    if (err instanceof CitasPendientesError) {
-      return res.status(409).json({
-        error: 'CITAS_PENDIENTES',
-        message: err.message,
-        totalCitas: err.totalCitas,
-        sedeOrigenId: err.sedeOrigenId,
-      });
-    }
     throw err;
   }
 });
 
 // ─── PUT /movimientos/:id ──────────────────────────────────────────────────────
 // Edita un movimiento: SEDE DESTINO, fecha fin, motivo y notas.
-// - Cambiar la SEDE exige gestionar antes las citas activas del período (igual que al
-//   crear) → 409 CITAS_PENDIENTES. Si no, quedarían citas huérfanas en la sede vieja.
 // - Cambiar la FECHA FIN de un movimiento temporal SINCRONIZA su RETORNO automático
 //   (la asignación que devuelve a la sede matriz): se corre su inicio, se crea si el
 //   movimiento pasa de indefinido a temporal, o se elimina si pasa a indefinido.
@@ -357,14 +324,6 @@ router.put('/:id', requireAuth, requirePermiso('movimientos.editar'), async (req
       const completo = await prisma.asignacionSede.findUnique({ where: { id: recreado.id }, include: INCLUDE_COMPLETO });
       return res.json(completo);
     } catch (err) {
-      if (err instanceof CitasPendientesError) {
-        return res.status(409).json({
-          error: 'CITAS_PENDIENTES',
-          message: err.message,
-          totalCitas: err.totalCitas,
-          sedeOrigenId: err.sedeOrigenId,
-        });
-      }
       throw err;
     }
   }
@@ -379,43 +338,6 @@ router.put('/:id', requireAuth, requirePermiso('movimientos.editar'), async (req
   if (nuevaFechaFin && nuevaFechaFin < existente.fechaInicio) {
     throw new AppError('La fecha «hasta» no puede ser anterior al inicio del movimiento.', 400, 'RANGO_INVERTIDO');
   }
-  // Acortar el movimiento: las citas ya agendadas en ESTA sede después del nuevo «hasta» se quedarían
-  // en una sede donde la profesional ya no está (al crear y al cambiar de sede sí se revisaba; aquí no).
-  if (cambiaFechaFin && nuevaFechaFin && (!existente.fechaFin || nuevaFechaFin < existente.fechaFin)) {
-    const det = await detalleCitasBloqueantes({
-      profesionalId: existente.profesionalId, sedeId: existente.sedeId,
-      fecha: { gt: nuevaFechaFin, ...(existente.fechaFin ? { lte: existente.fechaFin } : {}) },
-    });
-    if (det.total > 0) {
-      return res.status(409).json({
-        // Código propio: la pantalla muestra este mensaje (con las citas) en vez del panel de «cambiar de sede».
-        error: 'CITAS_DESPUES_DEL_FIN',
-        message: `No se puede poner fin: ${det.total === 1 ? 'queda 1 cita' : `quedan ${det.total} citas`} en esta sede después de la nueva fecha «hasta» (${det.texto}). Muévelas a otra persona o cancélalas y vuelve a guardar.`,
-        totalCitas: det.total, sedeOrigenId: existente.sedeId, citas: det.citas,
-      });
-    }
-  }
-
-  if (cambiaSede) {
-    const totalCitas = await prisma.cita.count({
-      where: {
-        profesionalId: existente.profesionalId,
-        sedeId: { not: data.sedeId! }, // las de la sede nueva no estorban
-        fecha: { gte: existente.fechaInicio, lte: nuevaFechaFin ?? addDays(existente.fechaInicio, 365) },
-        estado: { in: ['agendada', 'confirmada', 'llego', 'en_atencion'] },
-        deletedAt: null,
-      },
-    });
-    if (totalCitas > 0) {
-      return res.status(409).json({
-        error: 'CITAS_PENDIENTES',
-        message: `Hay ${totalCitas} cita(s) activa(s) en el período; gestiónalas antes de cambiar la sede.`,
-        totalCitas,
-        sedeOrigenId: existente.sedeId,
-      });
-    }
-  }
-
   // Localizar el RETORNO automático asociado (si este movimiento es temporal y cerró
   // una asignación previa): la fila que devuelve a la sede matriz al día siguiente del fin.
   const pred = await hallarPredecesor(prisma, existente);
@@ -552,26 +474,6 @@ router.delete('/:id', requireAuth, requirePermiso('movimientos.editar'), async (
     where: { id: req.params.id },
   });
   if (!asignacion) throw new AppError('Movimiento no encontrado', 404);
-
-  // Igual que al CREAR un movimiento: si hay citas activas del profesional en el período
-  // (de hoy en adelante), eliminarlo las dejaría huérfanas en una sede donde ya no estará.
-  // Se exige gestionarlas primero — misma regla y mismo código de error que el POST.
-  const hoy = fechaDb(new Date().toISOString().slice(0, 10));
-  const desde = asignacion.fechaInicio > hoy ? asignacion.fechaInicio : hoy;
-  const hasta = asignacion.fechaFin ?? addDays(desde, 365);
-  if (hasta >= desde) {
-    const det = await detalleCitasBloqueantes({ profesionalId: asignacion.profesionalId, sedeId: asignacion.sedeId, fecha: { gte: desde, lte: hasta } });
-    const citasPendientes = det.total;
-    if (citasPendientes > 0) {
-      return res.status(409).json({
-        error: 'CITAS_PENDIENTES',
-        message: `No se puede eliminar: ${citasPendientes === 1 ? 'tiene 1 cita activa' : `tiene ${citasPendientes} citas activas`} en esa sede dentro del período (${det.texto}). Muévelas a otra persona o cancélalas primero.`,
-        citas: det.citas,
-        totalCitas: citasPendientes,
-        sedeOrigenId: asignacion.sedeId,
-      });
-    }
-  }
 
   // Se puede eliminar tanto un movimiento futuro como uno ACTIVO (ya iniciado):
   // en ambos casos se restaura la asignación previa (a su estado EXACTO), se borra

@@ -326,8 +326,8 @@ router.get('/seleccionables', requireAuth, async (req, res) => {
 });
 
 const profesionalSchema = z.object({
-  nombres: z.string().min(2),
-  apellidos: z.string().min(2),
+  nombres: z.string().min(1),
+  apellidos: z.string().min(1),
   tipo: z.enum(['podologa', 'medico', 'fisioterapeuta']),
   unidadNegocioId: z.string().uuid(),
   colegiatura: z.string().optional().nullable(),
@@ -772,7 +772,7 @@ router.post('/:id/bloqueos', requireAuth, requirePermiso('horarios.editar'), asy
   const { fechaInicio, fechaFin, motivo } = z.object({
     fechaInicio: z.string(),
     fechaFin: z.string(),
-    motivo: z.string().min(3),
+    motivo: z.string().min(1),
   }).parse(req.body);
 
   const ini = new Date(fechaInicio);

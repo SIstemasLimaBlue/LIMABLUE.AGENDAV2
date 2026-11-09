@@ -219,7 +219,7 @@ async function main() {
     return;
   }
 
-  // Uno por uno: si alguien tiene pacientes agendados en esa hora (409 CITAS_EN_RANGO) se anota y sigue.
+  // Uno por uno: si un almuerzo falla se anota y sigue.
   let cargados = 0;
   for (const a of aplicar) {
     try {

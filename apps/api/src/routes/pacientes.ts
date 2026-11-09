@@ -18,12 +18,12 @@ const router = Router();
 // valor con espacios alrededor (p.ej. " correo@x.com " pegado) no sea rechazado
 // por `.email()` ni guarde espacios. La capitalización la hace `normalizarPaciente`.
 const crearPacienteSchema = z.object({
-  nombres: z.string().trim().min(2),
-  apellidoPaterno: z.string().trim().min(2),
-  apellidoMaterno: z.string().trim().min(2),
+  nombres: z.string().trim().min(1),
+  apellidoPaterno: z.string().trim().min(1),
+  apellidoMaterno: z.string().trim().min(1),
   tipoDocumento: z.enum(['DNI', 'CE', 'PASAPORTE', 'RUC']).default('DNI'),
-  numeroDocumento: z.string().trim().min(8),
-  telefono: z.string().trim().min(9),
+  numeroDocumento: z.string().trim().min(1),
+  telefono: z.string().trim().min(1),
   email: z.string().trim().toLowerCase().email().optional(),
   fechaNacimiento: z.string().optional(),
   sexo: z.enum(['masculino', 'femenino', 'otro']).optional(),
@@ -532,9 +532,6 @@ async function resolverResidencia(
 
   if (ubigeoFinal === UBIGEO_EXTRANJERO) {
     const paisFinal = data.paisResidencia !== undefined ? data.paisResidencia : (antes?.paisResidencia ?? null);
-    if (!paisFinal || !esPaisValido(paisFinal)) {
-      throw new AppError('Un paciente Extranjero requiere un país de residencia válido del catálogo', 400, 'PAIS_REQUERIDO');
-    }
     out.paisResidencia = paisFinal;
   } else if ((antes?.paisResidencia ?? null) !== null || data.paisResidencia != null) {
     // Distrito peruano, "No precisa" o sin distrito → el país se LIMPIA (nunca debe

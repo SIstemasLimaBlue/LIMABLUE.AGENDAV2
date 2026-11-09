@@ -271,21 +271,6 @@ export function MovimientoModal({ onClose, movimientoEditar, prefillSedeId }: Pr
       onClose();
     },
     onError: async (e: Error & { statusCode?: number; data?: { error: string; sedeOrigenId: string; totalCitas: number } }) => {
-      if (e.statusCode === 409 && e.data?.error === 'CITAS_PENDIENTES') {
-        // Fallback: cargar panel de citas automáticamente
-        try {
-          const ver = await movimientosApi.verificarCitas({
-            profesionalId,
-            fechaInicio,
-            fechaFin: sinFechaFin ? null : (fechaFin || null),
-            sedeId,
-          });
-          setVerificacion(ver);
-        } catch {
-          toast.error(`${e.data.totalCitas} citas pendientes deben gestionarse primero`);
-        }
-        return;
-      }
       toast.error(e.message);
     },
   });
@@ -307,25 +292,7 @@ export function MovimientoModal({ onClose, movimientoEditar, prefillSedeId }: Pr
       onClose();
     },
     onError: async (e: Error & { statusCode?: number; data?: { error: string; totalCitas: number } }) => {
-      // Cambiar la sede con citas activas en el período → mostrar el panel para gestionarlas.
-      if (e.statusCode === 409 && e.data?.error === 'CITAS_PENDIENTES') {
-        try {
-          const ver = await movimientosApi.verificarCitas({
-            profesionalId,
-            fechaInicio,
-            fechaFin: sinFechaFin ? null : (fechaFin || null),
-            sedeId,
-          });
-          setVerificacion(ver);
-          // Si el panel no muestra nada (las citas que estorban están en la misma sede), que hable el servidor.
-          toast.error(ver.totalCitas > 0 ? 'Gestiona las citas del período antes de cambiar la sede' : (e.data as unknown as { message?: string } | undefined)?.message ?? e.message, { duration: 10000 });
-        } catch {
-          toast.error(`${e.data.totalCitas} citas pendientes deben gestionarse primero`);
-        }
-        return;
-      }
-      // Acortar con citas después del nuevo «hasta»: el mensaje del servidor dice cuáles (fecha, hora, paciente).
-      toast.error(e.message, { duration: e.data?.error === 'CITAS_DESPUES_DEL_FIN' ? 12000 : 4000 });
+      toast.error(e.message);
     },
   });
 

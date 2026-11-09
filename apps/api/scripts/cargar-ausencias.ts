@@ -5,8 +5,6 @@
  * (pedido del usuario). Se guardan igual que Permisos › Vacaciones: un bloqueo de día completo (08:00–20:00) por
  * día y persona, en la sede donde Movimientos la tiene ese día, con el tipo real de la ausencia en el motivo.
  *
- * Regla dura del sistema (la misma de la pantalla): NO se bloquea un día que ya tiene pacientes agendados con
- * esa persona; ese día se reporta y se salta para que coordinación mueva primero las citas.
  * Re-ejecutable: un día que ya está bloqueado no se duplica.
  *
  *   npx ts-node --transpile-only scripts/cargar-ausencias.ts --archivo="…xlsx"             → SIMULA

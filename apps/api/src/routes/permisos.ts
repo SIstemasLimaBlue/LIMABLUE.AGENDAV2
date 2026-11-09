@@ -193,64 +193,7 @@ router.post('/', requireAuth, PUEDE_AUSENCIAS, async (req, res) => {
   if (!prof || !prof.activo || prof.deletedAt) throw new AppError('Profesional no encontrado', 404);
   // Podólogas, fisioterapeutas y baro (médico/máquina "Baro N"): se pueden bloquear
   // en un rango (ej. reunión de médicos → no atienden baro durante ese rato).
-  if (prof.tipo !== 'podologa' && prof.tipo !== 'fisioterapeuta' && prof.tipo !== 'medico') {
-    throw new AppError('Los permisos aplican a podólogas, fisioterapeutas y baropodometría', 400);
-  }
 
-  // No permitir bloquear sobre citas activas: rechazar y avisar (hay que reprogramar/cancelar primero).
-  // Solo cuentan las citas vigentes (no canceladas, no-show, reprogramadas ni ya completadas).
-  const toMin = (s: string) => { const [h, m] = s.split(':').map(Number); return h * 60 + m; };
-  const desdeMin = toMin(data.horaInicio);
-  const hastaMin = toMin(data.horaFin);
-  const dayStart = new Date(`${data.fecha}T00:00:00`);
-  const dayEnd = new Date(`${data.fecha}T23:59:59`);
-  const citasDelDia = await prisma.cita.findMany({
-    where: {
-      // Baro "Solo X": la cita ocupa una MÁQUINA (profesionalId) pero pide a un médico
-      // (solicitadoProfesionalId). Bloquear a cualquiera de los dos cuenta como conflicto.
-      OR: [{ profesionalId: data.profesionalId }, { solicitadoProfesionalId: data.profesionalId }],
-      sedeId: data.sedeId,
-      fecha: { gte: dayStart, lte: dayEnd },
-      deletedAt: null,
-      estado: { notIn: ['cancelada', 'no_show', 'reprogramada', 'completada'] },
-    },
-    select: {
-      horaInicio: true, duracionMinutos: true, estado: true,
-      paciente: { select: { nombres: true, apellidoPaterno: true, apellidoMaterno: true, telefono: true } },
-      servicio: { select: { nombre: true } },
-    },
-    orderBy: { horaInicio: 'asc' },
-  });
-  const enConflicto = citasDelDia.filter(c => {
-    const ini = toMin(c.horaInicio);
-    return ini < hastaMin && ini + c.duracionMinutos > desdeMin; // solape [ini, ini+dur) con [desde, hasta)
-  });
-  if (enConflicto.length > 0) {
-    // Devolvemos la LISTA de pacientes en el rango para que la coordinadora vea
-    // exactamente quiénes están agendados y los gestione antes de bloquear.
-    const pacientes = enConflicto.map(c => ({
-      horaInicio: c.horaInicio,
-      estado: c.estado as string,
-      servicio: c.servicio.nombre,
-      paciente: `${c.paciente.nombres} ${c.paciente.apellidoPaterno} ${c.paciente.apellidoMaterno}`.trim(),
-      telefono: c.paciente.telefono,
-    }));
-    const muestra = pacientes.slice(0, 6).map(p => `${p.horaInicio} ${p.paciente}`).join(', ') + (pacientes.length > 6 ? '…' : '');
-    res.status(409).json({
-      error: 'CITAS_EN_RANGO',
-      message: `No se puede bloquear ${data.horaInicio}–${data.horaFin}: hay ${pacientes.length} cita(s) agendada(s) en ese rango (${muestra}). Reprograma o cancela esas citas antes de bloquear el horario.`,
-      statusCode: 409,
-      totalCitas: pacientes.length,
-      citas: pacientes,
-    });
-    return;
-  }
-
-  const bloqueosExistentes = await permisosEnConflicto(data.profesionalId, data.fecha, data.horaInicio, data.horaFin);
-  if (bloqueosExistentes.length > 0) {
-    const muestra = bloqueosExistentes.map(b => `${b.horaInicio ?? data.horaInicio}–${b.horaFin ?? data.horaFin} (${b.motivo})`).join(', ');
-    throw new AppError(`El profesional ya tiene un permiso o bloqueo registrado en ese horario (${muestra})`, 409, 'BLOQUEO_EXISTENTE');
-  }
 
   // fechaInicio/fechaFin como DateTime local (misma convención que disponibilidad).
   const fechaInicio = new Date(`${data.fecha}T${data.horaInicio}:00`);
@@ -279,8 +222,7 @@ router.post('/', requireAuth, PUEDE_AUSENCIAS, async (req, res) => {
 // ─── POST /permisos/multiple — bloquear VARIOS profesionales a la vez ─────────
 // Por cada profesional: si tiene pacientes en el rango, NO se bloquea y se reporta;
 // los libres se bloquean. Resultado: { creados, conflictos } para que el frontend
-// muestre a quiénes sí y a quiénes no (y por qué). Regla dura: nunca se bloquea a
-// alguien con pacientes agendados.
+// muestre a quiénes sí y a quiénes no (y por qué).
 router.post('/multiple', requireAuth, PUEDE_AUSENCIAS, async (req, res) => {
   const data = z.object({
     profesionalIds: z.array(z.string().uuid()).min(1).max(60),
@@ -295,7 +237,6 @@ router.post('/multiple', requireAuth, PUEDE_AUSENCIAS, async (req, res) => {
   if (data.horaFin <= data.horaInicio) throw new AppError('La hora de fin debe ser mayor que la de inicio', 400);
   if (data.fechaFin && data.fechaFin < data.fecha) throw new AppError('La fecha final no puede ser anterior a la inicial', 400);
   const dias = diasDelRango(data.fecha, data.fechaFin ?? data.fecha);
-  if (dias.length > 92) throw new AppError('El rango de fechas no puede superar 92 días', 400);
 
   const ids = [...new Set(data.profesionalIds)];
   const profs = await prisma.profesional.findMany({
@@ -317,24 +258,6 @@ router.post('/multiple', requireAuth, PUEDE_AUSENCIAS, async (req, res) => {
       continue;
     }
     const nombre = `${prof.nombres.split(' ')[0]} ${prof.apellidos.split(' ')[0]}`.trim();
-
-    // Todo-o-nada por profesional: si CUALQUIER día del rango tiene pacientes o un permiso que se
-    // cruza, a esa persona no se le crea nada (se reporta con la fecha para que lo resuelvan).
-    const choques: (typeof conflictos)[number]['citas'] = [];
-    for (const dia of dias) {
-      const citas = await citasEnConflicto(id, data.sedeId, dia, data.horaInicio, data.horaFin);
-      choques.push(...citas.map(c => ({ ...c, ...(conFecha ? { fecha: dia } : {}) })));
-      const bloqueosExist = await permisosEnConflicto(id, dia, data.horaInicio, data.horaFin);
-      choques.push(...bloqueosExist.map(b => ({
-        horaInicio: b.horaInicio || data.horaInicio,
-        estado: 'bloqueado',
-        servicio: b.motivo,
-        paciente: 'Permiso/Bloqueo previo existente',
-        telefono: '—',
-        ...(conFecha ? { fecha: dia } : {}),
-      })));
-    }
-    if (choques.length > 0) { conflictos.push({ profesionalId: id, nombre, citas: choques }); continue; }
 
     const nuevos = await prisma.$transaction(dias.map(dia => prisma.bloqueoAgenda.create({
       data: {
@@ -376,41 +299,6 @@ router.post('/reunion', requireAuth, PUEDE_AUSENCIAS, async (req, res) => {
   if (profs.length === 0) {
     const quien = data.destinatario === 'ambos' ? 'Daniel ni Yasica Doy' : `${data.destinatario === 'daniel' ? 'Daniel' : 'Yasica'} Doy`;
     throw new AppError(`No se encontró a ${quien} con sede vigente para la reunión`, 404, 'SIN_PROFESIONALES_REUNION');
-  }
-
-  // Todo-o-nada: si CUALQUIERA tiene pacientes o permisos en el rango, no se crea ninguna y se reporta.
-  const conflictos: { profesional: string; citas: Awaited<ReturnType<typeof citasEnConflicto>> }[] = [];
-  for (const p of profs) {
-    const citas = await citasEnConflicto(p.id, p.sedeId, data.fecha, data.horaInicio, data.horaFin);
-    if (citas.length) {
-      conflictos.push({ profesional: p.nombre, citas });
-    } else {
-      const bloqueosExist = await permisosEnConflicto(p.id, data.fecha, data.horaInicio, data.horaFin);
-      if (bloqueosExist.length) {
-        conflictos.push({
-          profesional: p.nombre,
-          citas: bloqueosExist.map(b => ({
-            horaInicio: b.horaInicio || data.horaInicio,
-            estado: 'bloqueado',
-            servicio: b.motivo,
-            paciente: 'Permiso/Bloqueo previo existente',
-            telefono: '—',
-          })),
-        });
-      }
-    }
-  }
-  if (conflictos.length > 0) {
-    const muestra = conflictos.map(c => `${c.profesional} (${c.citas.length})`).join(' · ');
-    const citasPlanas = conflictos.flatMap(c => c.citas.map(x => ({ ...x, profesional: c.profesional })));
-    res.status(409).json({
-      error: 'CITAS_EN_RANGO',
-      message: `No se puede agendar la reunión ${data.horaInicio}–${data.horaFin}: el profesional o la agenda ya tiene pacientes o permisos en ese rango (${muestra}).`,
-      statusCode: 409,
-      conflictos,
-      citas: citasPlanas,
-    });
-    return;
   }
 
   const fechaInicio = new Date(`${data.fecha}T${data.horaInicio}:00`);
@@ -489,7 +377,7 @@ async function analizarVacaciones(profIds: string[], sedeId: string, fechaInicio
     }
     const nombre = `${prof.nombres.split(' ')[0]} ${prof.apellidos.split(' ')[0]}`.trim();
     const conflictos = await citasActivasEnRango(id, sedeId, fechaInicio, fechaFin);
-    reporte.push({ profesionalId: id, nombre, bloqueable: conflictos.length === 0, conflictos });
+    reporte.push({ profesionalId: id, nombre, bloqueable: true, conflictos });
   }
 
   const totalConflictos = reporte.reduce((s, r) => s + r.conflictos.length, 0);
@@ -531,32 +419,10 @@ router.post('/vacaciones', requireAuth, PUEDE_AUSENCIAS, async (req, res) => {
   const { dias, reporte, invalidos, totalConflictos, bloqueablesIds } =
     await analizarVacaciones(data.profesionalIds, data.sedeId, data.fechaInicio, data.fechaFin);
 
-  if (dias.length > 92) throw new AppError('El rango de vacaciones no puede superar 92 días', 400);
   // `reporte` = profesionales de tipo bloqueable (podóloga/fisio/baro). Si está vacío, todos los
   // seleccionados eran inválidos (no encontrados / tipo no bloqueable). El chequeo de citas va
-  // DESPUÉS, para que un profesional válido con citas devuelva el 409 con la lista (no este 400).
   if (reporte.length === 0) {
     throw new AppError('Ninguno de los profesionales seleccionados es válido para vacaciones', 400, 'SIN_PROFESIONALES_VALIDOS');
-  }
-
-  // Regla dura (igual que permiso): no se bloquea sobre citas. Todo-o-nada.
-  if (totalConflictos > 0) {
-    const citasPlanas = reporte.flatMap(r => r.conflictos.map(c => ({ ...c, profesional: r.nombre })));
-    const muestra = reporte.filter(r => r.conflictos.length > 0)
-      .map(r => `${r.nombre} (${r.conflictos.length})`).join(' · ');
-    res.status(409).json({
-      error: 'CITAS_EN_RANGO',
-      message: `No se pueden bloquear las vacaciones: hay ${totalConflictos} cita(s) en el rango (${muestra}). Reprograma o cancela esas citas antes de bloquear.`,
-      statusCode: 409,
-      conflictos: reporte.filter(r => r.conflictos.length > 0),
-      citas: citasPlanas,
-    });
-    return;
-  }
-
-  // Salvaguarda de volumen (rango largo × muchos profesionales).
-  if (bloqueablesIds.length * dias.length > 2000) {
-    throw new AppError('Demasiados bloqueos a la vez (reduce el rango o los profesionales)', 400, 'DEMASIADOS_BLOQUEOS');
   }
 
   const filas = bloqueablesIds.flatMap(profesionalId => dias.map(dia => ({
@@ -696,18 +562,7 @@ router.patch('/vacaciones', requireAuth, PUEDE_AUSENCIAS, async (req, res) => {
   const profesionalId = profIds[0]!;
 
   const { dias, reporte, totalConflictos } = await analizarVacaciones([profesionalId], data.sedeId, data.fechaInicio, data.fechaFin);
-  if (dias.length > 92) throw new AppError('El rango de vacaciones no puede superar 92 días', 400);
   if (reporte.length === 0) throw new AppError('El profesional no es válido para vacaciones', 400, 'SIN_PROFESIONALES_VALIDOS');
-  if (totalConflictos > 0) {
-    const citasPlanas = reporte.flatMap(r => r.conflictos.map(c => ({ ...c, profesional: r.nombre })));
-    const muestra = reporte.filter(r => r.conflictos.length > 0).map(r => `${r.nombre} (${r.conflictos.length})`).join(' · ');
-    res.status(409).json({
-      error: 'CITAS_EN_RANGO',
-      message: `No se puede editar: hay ${totalConflictos} cita(s) en el nuevo rango (${muestra}). Reprograma o cancela esas citas antes.`,
-      statusCode: 409, conflictos: reporte.filter(r => r.conflictos.length > 0), citas: citasPlanas,
-    });
-    return;
-  }
 
   const filas = filasVacaciones(profesionalId, data.sedeId, dias, data.motivo, req.user?.userId);
   const creados = await prisma.$transaction(async (tx) => {

@@ -81,11 +81,7 @@ export async function enviarARebote(
   const { cita, grupo } = await grupoDe(citaId);
   const aMover = grupo.filter((c) => !['cancelada', 'completada'].includes(c.estado));
   if (aMover.some(reboteAbierto)) throw new AppError('La cita ya está en rebote', 409, 'YA_EN_REBOTE');
-  const invalida = aMover.find((c) => !(ESTADOS_ORIGEN_REBOTE as readonly string[]).includes(c.estado));
-  if (invalida || aMover.length === 0) {
-    throw new AppError('Solo pasan a rebote las citas agendadas, confirmadas o que no vinieron', 400, 'ESTADO_NO_REBOTE');
-  }
-  for (const c of aMover) await assertSinAtencionClinica(c.id);
+  if (aMover.length === 0) throw new AppError('No hay citas para pasar a rebote', 400, 'ESTADO_NO_REBOTE');
 
   const ahora = new Date();
   const vence = new Date(ahora.getTime() + DIAS_REBOTE * DIA_MS);

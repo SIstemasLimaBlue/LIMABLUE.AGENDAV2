@@ -91,53 +91,11 @@ export async function crearAlmuerzo(data: {
       orderBy: { fechaInicio: 'desc' },
     });
 
-    // 24-sep-2026: no se pone el almuerzo en una sede donde la profesional NO está ese día (si está asignada a OTRA).
-    // Así nació el almuerzo de One de Raysa estando en Lince: la agenda de Lince no lo mostraba, pero bloqueaba 14–15.
-    if (!asignacion) {
-      const otra = await prisma.asignacionSede.findFirst({
-        where: {
-          profesionalId: data.profesionalId,
-          fechaInicio: { lte: fechaConsulta },
-          OR: [{ fechaFin: null }, { fechaFin: { gte: fechaConsulta } }],
-        },
-        orderBy: { fechaInicio: 'desc' },
-        select: { sede: { select: { nombre: true } }, profesional: { select: { nombres: true } } },
-      });
-      if (otra) {
-        throw new AppError(
-          `${otra.profesional.nombres.split(' ')[0]} está asignada a ${otra.sede.nombre} en esa fecha, no a esta sede: registra su almuerzo en ${otra.sede.nombre}.`,
-          422,
-          'ALMUERZO_OTRA_SEDE',
-        );
-      }
-    }
-
     fFin = fFinMes;
     if (asignacion?.fechaFin && asignacion.fechaFin < fFinMes) {
       fFin = asignacion.fechaFin;
     }
     esRec = true;
-  }
-
-  // Regla dura (igual que Permisos y Vacaciones): no se pone un almuerzo ENCIMA de pacientes ya
-  // agendados. Antes se creaba sin mirar y las citas quedaban tapadas por la franja, sin aviso.
-  const citasTapadas = await prisma.cita.findMany({
-    where: {
-      OR: [{ profesionalId: data.profesionalId }, { solicitadoProfesionalId: data.profesionalId }],
-      deletedAt: null, estado: { in: ['agendada', 'confirmada', 'llego', 'en_atencion'] },
-      fecha: { gte: new Date(`${fechaStr}T00:00:00.000Z`), lte: fFin },
-    },
-    select: { fecha: true, horaInicio: true, duracionMinutos: true, paciente: { select: { nombres: true, apellidoPaterno: true } } },
-    orderBy: [{ fecha: 'asc' }, { horaInicio: 'asc' }],
-  });
-  const aMin = (h: string) => Number(h.slice(0, 2)) * 60 + Number(h.slice(3, 5));
-  // 30-sep-2026: el almuerzo del mes (recurrente) NO rige sábado ni domingo (agenda, disponibilidad y agendar ya lo
-  // ignoran esos días): una cita del sábado a esa hora no es choque. Antes frenaba el break de Doris por un sábado.
-  const choques = citasTapadas.filter((c) => (!esRec || ![0, 6].includes(c.fecha.getUTCDay()))
-    && aMin(c.horaInicio) < aMin(turno.horaFin) && aMin(c.horaInicio) + c.duracionMinutos > aMin(turno.horaInicio));
-  if (choques.length > 0) {
-    const lista = choques.slice(0, 5).map((c) => `${c.fecha.toISOString().slice(8, 10)}/${c.fecha.toISOString().slice(5, 7)} ${c.horaInicio} ${c.paciente?.nombres?.split(' ')[0] ?? ''} ${c.paciente?.apellidoPaterno ?? ''}`.trim()).join(', ');
-    throw new AppError(`Hay ${choques.length} cita(s) agendada(s) en ese horario de almuerzo (${lista}${choques.length > 5 ? '…' : ''}). Muévelas primero o elige otro turno.`, 409, 'CITAS_EN_RANGO');
   }
 
   // Buscar almuerzos previos activos que se traslapen con la nueva ventana [fIni, fFin]

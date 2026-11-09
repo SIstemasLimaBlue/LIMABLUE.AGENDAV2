@@ -23,7 +23,7 @@ jest.mock('../src/services/outlookCalendarService', () => ({ sincronizarCitaOutl
 jest.mock('../src/services/recordatorioService', () => ({ cancelarRecordatoriosDeCita: jest.fn() }));
 jest.mock('../src/services/videoEnvioService', () => ({ cancelarVideosDeCita: jest.fn() }));
 jest.mock('../src/services/paqueteSesionService', () => ({ sincronizarSesionPaquete: jest.fn() }));
-jest.mock('../src/services/historiaClinicaService', () => ({ assertSinAtencionClinica: jest.fn() }));
+jest.mock('../src/services/historiaClinicaService', () => ({ assertSinAtencionClinica: jest.fn(), atencionesDelBloqueForzado: jest.fn(async () => ({ vacias: [], conRegistros: [] })), atencionesVaciasDelBloque: jest.fn(async () => []), retirarAtencionVaciaEnTx: jest.fn() }));
 jest.mock('../src/services/citaCompleta', () => ({
   getCitaCompleta: jest.fn(async (id: string) => ({ id })),
   crearComentarioEnTx: jest.fn(),

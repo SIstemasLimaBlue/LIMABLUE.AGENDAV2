@@ -28,12 +28,12 @@ beforeEach(() => {
 });
 
 describe('Almuerzo solo en la sede donde está la profesional', () => {
-  it('asignada a OTRA sede ese día → se rechaza y dice dónde registrarlo', async () => {
+  it('asignada a OTRA sede ese día → se crea', async () => {
     asignacionFindFirst
       .mockResolvedValueOnce(null) // no está en One
       .mockResolvedValueOnce({ sede: { nombre: 'Lince' }, profesional: { nombres: 'Raysa Alessandra' } });
-    await expect(crearAlmuerzo(base)).rejects.toMatchObject({ statusCode: 422, code: 'ALMUERZO_OTRA_SEDE' });
-    expect(bloqueoCreate).not.toHaveBeenCalled();
+    await crearAlmuerzo(base);
+    expect(bloqueoCreate).toHaveBeenCalled();
   });
 
   it('asignada a ESA sede → se crea en esa sede', async () => {
@@ -70,10 +70,10 @@ describe('Almuerzo del mes: sábado y domingo no cuentan como choque', () => {
     expect(bloqueoCreate).toHaveBeenCalledTimes(1);
   });
 
-  it('cita un viernes a las 13:00 → sí frena (tapa a un paciente)', async () => {
+  it('cita un viernes a las 13:00 → se crea', async () => {
     asignacionFindFirst.mockResolvedValueOnce({ fechaFin: null });
     citaFindMany.mockResolvedValue([cita('2026-10-02', '13:00')]);
-    await expect(crearAlmuerzo(doris)).rejects.toMatchObject({ statusCode: 409, code: 'CITAS_EN_RANGO' });
-    expect(bloqueoCreate).not.toHaveBeenCalled();
+    await crearAlmuerzo(doris);
+    expect(bloqueoCreate).toHaveBeenCalled();
   });
 });

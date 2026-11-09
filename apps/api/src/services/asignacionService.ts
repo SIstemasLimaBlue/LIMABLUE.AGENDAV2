@@ -3,7 +3,7 @@ import { addDays, format } from 'date-fns';
 import { prisma } from '../db';
 import { invalidateDisponibilidadSede } from '../redis';
 import { getIO } from '../socket';
-import { AppError, CitasPendientesError } from '../middleware/errorHandler';
+import { AppError } from '../middleware/errorHandler';
 import { fechaDb, hoyLimaStr } from '../utils/fechaLima';
 import { esFichaAdicional } from '../utils/fichaAdicional';
 import { auditEnTx } from './audit';
@@ -97,74 +97,10 @@ export async function vacacionesEnRango(
 // Núcleo de la creación, COMPONIBLE dentro de una transacción externa (lo usan
 // crearMovimiento y la edición estructural de PUT /movimientos/:id, que recrea).
 export async function crearMovimientoEnTx(tx: Prisma.TransactionClient, data: CrearMovimientoInput) {
-  // Las vacaciones NO se registran por Movimientos: van a Permisos → Vacaciones
-  // (tabla bloqueos_agenda). Bloqueamos el motivo para que las dos tablas no se pisen.
-  if (data.motivo === 'VACACIONES') {
-    throw new AppError('Las vacaciones se registran en Permisos → Vacaciones, no en Movimientos.', 400, 'MOTIVO_VACACIONES_NO_PERMITIDO');
-  }
-
-  // Guard: los profesionales "Adicional" y de Baropodometría son fijos de su sede y no pueden moverse.
-  const prof = await tx.profesional.findUnique({
-    where: { id: data.profesionalId },
-    select: { nombres: true, apellidos: true, tipo: true, activo: true, deletedAt: true, unidadNegocio: { select: { nombre: true } } },
-  });
-  // 12-oct-2026: a una ficha inactiva o dada de baja no se le crean movimientos (a la ficha vieja de Laura Escalante,
-  // inactiva, le crearon uno y quedó «en» Los Olivos junto a la ficha nueva).
-  if (prof && (!prof.activo || prof.deletedAt)) {
-    throw new AppError(`${prof.nombres} ${prof.apellidos} está inactiva: actívala en Administración antes de moverla.`, 400, 'PROFESIONAL_INACTIVO');
-  }
-  if (prof && esProfesionalFijo(prof.nombres, prof.tipo, prof.unidadNegocio?.nombre)) {
-    throw new AppError('Los profesionales "Adicional" y de Baropodometría son fijos de su sede y no pueden moverse.', 400, 'PROFESIONAL_FIJO');
-  }
-
   const nuevaFechaInicio = toDate(data.fechaInicio);
   const nuevaFechaFin = data.fechaFin ? toDate(data.fechaFin) : null;
 
   {
-    // ── 0. Verificar citas pendientes (DENTRO de la transacción para cerrar la
-    //       ventana TOCTOU). ROBUSTEZ: se cuentan TODAS las citas activas de la
-    //       podóloga en el período, en CUALQUIER sede (no solo la de origen) — así
-    //       el chequeo nunca pierde citas por un desajuste de sede, igual que
-    //       `verificar-citas`. ───────────────────────────────────────────────
-    const asignacionOrigen = await tx.asignacionSede.findFirst({
-      where: {
-        profesionalId: data.profesionalId,
-        activa: true,
-        fechaInicio: { lte: nuevaFechaInicio },
-        OR: [{ fechaFin: null }, { fechaFin: { gte: nuevaFechaInicio } }],
-      },
-      select: { sedeId: true },
-    });
-    // 28-sep-2026: las citas en la sede DESTINO no estorban (ahí va a estar); solo las de otras sedes quedarían huérfanas.
-    const pendientes = await tx.cita.findMany({
-      where: {
-        profesionalId: data.profesionalId,
-        sedeId: { not: data.sedeId },
-        fecha: { gte: nuevaFechaInicio, lte: nuevaFechaFin ?? addDays(nuevaFechaInicio, 365) },
-        estado: { in: ['agendada', 'confirmada', 'llego', 'en_atencion'] },
-        deletedAt: null,
-      },
-      select: { fecha: true, horaInicio: true, sede: { select: { nombre: true } } },
-      orderBy: [{ fecha: 'asc' }, { horaInicio: 'asc' }],
-    });
-    if (pendientes.length > 0) {
-      const detalle = pendientes.slice(0, 6).map((c) => `${c.fecha.toISOString().slice(8, 10)}/${c.fecha.toISOString().slice(5, 7)} ${c.horaInicio} (${c.sede.nombre})`).join(', ')
-        + (pendientes.length > 6 ? ` y ${pendientes.length - 6} más` : '');
-      throw new CitasPendientesError(pendientes.length, asignacionOrigen?.sedeId ?? data.sedeId, detalle);
-    }
-
-    // ── 0-bis. Coordinación con VACACIONES: un movimiento no puede pisar días de
-    //          vacación del profesional (las tablas se hablan). ──────────────────
-    const vac = await vacacionesEnRango(tx, data.profesionalId, nuevaFechaInicio, nuevaFechaFin);
-    if (vac) {
-      const nom = prof ? `${prof.nombres.split(' ')[0]} ${prof.apellidos.split(' ')[0]}` : 'la profesional';
-      throw new AppError(
-        `No se puede mover a ${nom}: tiene vacaciones del ${fechaLabel(vac.desde)} al ${fechaLabel(vac.hasta)}. Ajusta el rango del movimiento o elimina/edita las vacaciones primero.`,
-        409,
-        'VACACIONES_EN_PERIODO',
-      );
-    }
-
     // ── 1. Encontrar y cerrar la asignación vigente ─────────────────────────
     // OJO: NO se filtra por `activa`. Una base "reemplazada" por un movimiento FUTURO queda
     // activa=false pero SIGUE siendo la sede vigente hoy (su rango aún cubre el día). Si al mover
