@@ -39,7 +39,7 @@ export function reservaWebHabilitada(): boolean {
 function sumarDias(fecha: string, dias: number): string {
   const d = fechaDb(fecha); d.setUTCDate(d.getUTCDate() + dias); return fechaAStr(d);
 }
-function minutosAhoraLima(ref: Date = new Date()): number {
+export function minutosAhoraLima(ref: Date = new Date()): number {
   return ((ref.getUTCHours() - LIMA_OFFSET_H + 24) % 24) * 60 + ref.getUTCMinutes();
 }
 

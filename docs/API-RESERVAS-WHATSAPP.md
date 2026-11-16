@@ -163,7 +163,7 @@ Respuesta **201** (o **200** si es un reintento ya procesado, con `"repetida": t
 `expirada` (no pagó a tiempo: la cita se canceló) o `reembolsar` (pagó cuando la cita ya no estaba vigente), y vienen
 `pagado`, `pagoEstado` y, mientras se pueda pagar, `pago`. `estadoCita` es el estado real en la Agenda
 (`agendada`, `confirmada`, `llego`, `en_atencion`, `completada`, `no_show`, `cancelada`, `reprogramada`). Si el paciente quiere
-**cambiar o cancelar**, que se comunique con la clínica (esta API solo registra).
+**cambiar o cancelar**, ver 3.8.
 
 ### 3.6 Pago previo de sábado y domingo (13-nov-2026) — solo canal `whatsapp`
 Las citas de **sábado y domingo** que se reservan por el chat (canal `whatsapp`) se pagan **antes**, por la tienda en línea de
@@ -204,6 +204,60 @@ del flujo de GHL configurado en `GHL_AVISO_WEBHOOK_URL`, y GHL envía la plantil
   llegó o si faltan menos de 20 minutos. Las de pago previo se avisan solo si se pagaron.
 - El webhook debe responder `2xx`; si no, la Agenda reintenta cada minuto mientras falten más de 20 minutos.
 
+### 3.8 Mis citas, cancelar y reprogramar (16-nov-2026)
+Sirve para **cualquier cita vigente** del paciente (la creó el chat o recepción). La identidad es el **documento** del paciente (decisión
+de la clínica; se mitiga con límites por llave —20 búsquedas y 10 cambios por minuto—, auditoría y devolviendo solo datos mínimos).
+El tipo de documento es opcional: sin él se busca por el número.
+
+**`GET /citas-paciente?numeroDocumento=75921504`** → citas vigentes y futuras:
+```json
+{ "citas": [ { "codigo": "LB-490390", "fecha": "2026-11-16", "horaInicio": "13:00", "duracionMinutos": 60,
+  "sede": { "nombre": "Lince", "direccion": "…" }, "servicio": "Limpieza Clínica del Pie", "variante": "Regular",
+  "estadoCita": "agendada", "puedeCambiar": true } ] }
+```
+`codigo` es el `LB-…` si la cita nació de una reserva en línea, o el **id de la cita** si la registró la clínica: úsenlo tal cual abajo.
+`puedeCambiar: false` trae `motivo` (los códigos de la tabla de abajo): Ana deriva a un asesor. Sin citas: `citas: []`.
+
+**`POST /{codigo}/cancelar`** — cuerpo `{ "numeroDocumento": "75921504", "motivo": "…" }` (motivo opcional). `200`
+`{ codigo, estado: "cancelada", repetida }`; si ya estaba cancelada, `repetida: true`. Si el documento no es del dueño: `404 RESERVA_NO_ENCONTRADA`.
+
+**`POST /{codigo}/reprogramar`** — cuerpo `{ "numeroDocumento": "75921504", "fecha": "2026-11-17", "horaInicio": "10:00" }`. La hora debe salir
+de `/horas` (misma sede y servicio de la cita). `201` con `codigo`, `estado: "confirmada"`, `citaId`, `fecha`, `horaInicio`,
+`duracionMinutos`, `monto`, `moneda`, `sede`, `servicio`, `variante`, `repetida` y `codigoAnterior`. **La cita se mueve, no se crea
+otra**: conserva su código y su historial, así que `codigo` = `codigoAnterior`. Pedir la misma fecha y hora que ya tiene (un reintento)
+responde igual, con `repetida: true`. Si la hora nueva ya se ocupó: `409 HORA_NO_DISPONIBLE` y la cita queda como estaba.
+
+Códigos `409` (Ana deriva a un asesor, salvo `HORA_NO_DISPONIBLE`, que se resuelve ofreciendo otra hora):
+| Código | Cuándo |
+|---|---|
+| `FUERA_DE_PLAZO` | Faltan menos de 2 horas para la cita (o ya pasó). Configurable: `RESERVA_CHAT_CAMBIO_ANTICIPACION_MIN` (120) |
+| `REQUIERE_ASESOR` | Cita con pago (en línea o en la sede), de paquete o de visita de dos servicios, o con profesional pedido; reprogramar a un sábado o domingo, un servicio que no se reserva en línea en esa sede o un paciente sin DNI ni CE |
+| `ESPERANDO_PAGO` | La reserva de fin de semana aún espera el pago (se libera sola a los 10 minutos) |
+| `NO_SE_PUEDE_CANCELAR` | La cita ya está en curso o fue atendida |
+| `NO_VIGENTE` | La cita ya no está vigente (cancelada) — solo al reprogramar |
+| `HORA_NO_DISPONIBLE` | La hora nueva ya se ocupó |
+
+### 3.9 Rutas agrupadas para GHL (16-nov-2026) — solo la API de WhatsApp
+GHL deja solo **5 acciones «Llamada a API» por agente**. Estas dos rutas reúnen todo, y Ana usa 3 acciones (Consultar, Reservar cita con
+`POST /` y Cambiar cita). Hacen lo mismo que las rutas sueltas (mismas funciones, reglas y límites); las sueltas siguen funcionando.
+
+**`GET /consultar?que=…`** — el parámetro `que` elige la consulta:
+
+| `que` | Parámetros obligatorios | Equivale a |
+|---|---|---|
+| `catalogo` | — | `GET /catalogo` |
+| `dias` | `sedeId`, `servicioId`, `desde`, `hasta` | `GET /dias` |
+| `horas` | `sedeId`, `servicioId`, `fecha` | `GET /horas` (con `cupos`) |
+| `reserva` | `codigo` (`LB-123456`) | `GET /:codigo` |
+| `citas` | `numeroDocumento` | `GET /citas-paciente` (con su límite de 20 por minuto) |
+
+**`POST /cambiar`** — cuerpo JSON con `accion`:
+- `{ "accion": "cancelar", "codigo": "LB-123456", "numeroDocumento": "…", "motivo": "…" }` → como `POST /{codigo}/cancelar` (`200`).
+- `{ "accion": "reprogramar", "codigo": "LB-123456", "numeroDocumento": "…", "fecha": "AAAA-MM-DD", "horaInicio": "HH:MM" }` → como
+  `POST /{codigo}/reprogramar` (`201`).
+
+Una combinación inválida (por ejemplo `que=horas` sin `fecha`, o una `accion` desconocida) responde `422` con el campo que falta.
+
 ## 4. Reintentos sin duplicar (`referencia`)
 Si la llamada `POST /` se corta (tiempo de espera, caída de red) y no saben si se creó, **repitan exactamente la misma petición con la
 misma `referencia`**: devuelve la reserva ya creada (`200`, `"repetida": true`) en vez de crear otra cita. Usen una `referencia`
@@ -227,8 +281,9 @@ Los mensajes (`message`, `mensaje`) están en español y se pueden **mostrar tal
 | 409 | `HORA_NO_DISPONIBLE` | Esa hora ya se ocupó: ofrecer otra |
 | 502 | `PAGO_NO_DISPONIBLE` | Sábado o domingo: la tienda no respondió al preparar el pago. No se creó nada |
 | 422 | `VALIDATION_ERROR` | Datos mal escritos (documento, celular, correo, falta `aceptaDatos`…) |
-| 404 | `RESERVA_NO_ENCONTRADA` | El código no existe (o se hizo con la otra API) |
-| 429 | `DEMASIADOS_INTENTOS` | Límite de la llave: 240 consultas/min y 30 reservas/min. Esperar un momento |
+| 404 | `RESERVA_NO_ENCONTRADA` | El código no existe, se hizo con la otra API o (3.8) el documento no es del dueño de la cita |
+| 409 | `FUERA_DE_PLAZO` / `REQUIERE_ASESOR` / `ESPERANDO_PAGO` / `NO_SE_PUEDE_CANCELAR` / `NO_VIGENTE` | Cancelar/reprogramar: ver la tabla de 3.8 (Ana deriva a un asesor) |
+| 429 | `DEMASIADOS_INTENTOS` | Límite de la llave por minuto: 240 consultas, 30 reservas, 20 búsquedas de citas por documento y 10 cancelaciones o reprogramaciones. Esperar un momento |
 | 502 / 503 | `AGENDA_ERROR` / `AGENDA_NO_RESPONDE` / `RESERVA_NO_CONFIGURADA` | Falla temporal o sin configurar en el servidor: reintentar con la **misma** `referencia`; si persiste, avisar a Sistemas |
 
 ## 6. Pruebas

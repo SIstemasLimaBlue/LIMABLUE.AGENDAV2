@@ -15,6 +15,13 @@
  *  GET  /horas?sedeId&servicioId&fecha             horas libres de un día y cupos (cuántos pacientes caben en cada hora)
  *  POST /                                          registra al paciente (DNI o CE) y CREA LA CITA
  *  GET  /:codigo                                   estado de una reserva hecha por esta API
+ * Mis citas, cancelar y reprogramar (16-nov-2026, services/reservaWeb/gestion.ts; la identidad es el documento del paciente):
+ *  GET  /citas-paciente?numeroDocumento=                        citas próximas del paciente (`codigo`, `puedeCambiar`, `motivo`)
+ *  POST /:codigo/cancelar      {numeroDocumento, motivo?}        `codigo` = «LB-…» o el id de la cita
+ *  POST /:codigo/reprogramar   {numeroDocumento, fecha, horaInicio}
+ * Rutas AGRUPADAS para el agente de GHL (solo la API de WhatsApp):
+ *  GET  /consultar?que=catalogo|dias|horas|reserva|citas       (+ los parámetros de cada consulta)
+ *  POST /cambiar   {accion: cancelar|reprogramar, codigo, numeroDocumento, fecha?, horaInicio?, motivo?}
  */
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
@@ -22,7 +29,8 @@ import { z } from 'zod';
 import { AppError } from '../middleware/errorHandler';
 import { requireAuth } from '../middleware/auth';
 import { catalogo, horasConCupos, diasDisponibles, reservar, estadoReservaPorCodigo } from '../services/reservaWeb/reservaWebService';
-import { camposPaciente, revisarDocumento, normalizarPaciente } from '../services/reservaWeb/validaciones';
+import { camposPaciente, revisarDocumento, normalizarPaciente, normalizarDocumento, TIPOS_DOCUMENTO_RESERVA } from '../services/reservaWeb/validaciones';
+import { citasProximas, cancelarCitaChat, reprogramarCitaChat } from '../services/reservaWeb/gestion';
 
 /** Permiso de la llave de la API WEB (es el de la llave que existía antes de separar las APIs). */
 export const SCOPE_RESERVAS = 'reservas:write';
@@ -41,6 +49,19 @@ const crearSchema = camposPaciente({ emailObligatorio: false }).extend({
   aceptaDatos: z.literal(true, { errorMap: () => ({ message: 'El paciente debe aceptar el tratamiento de sus datos personales (aceptaDatos: true)' }) }),
   referencia: z.string().trim().min(6).max(100).optional().nullable(),
 }).superRefine(revisarDocumento);
+
+// Documento del paciente para «mis citas», cancelar y reprogramar: el tipo es opcional (el chat manda solo el número).
+// Sin tipo vale cualquier documento de 8 a 12 letras o números; con tipo se valida como al reservar.
+const zDocumento = z.object({
+  tipoDocumento: z.enum(TIPOS_DOCUMENTO_RESERVA).optional().nullable(),
+  numeroDocumento: z.string().trim().min(1, 'Indica el número de documento').max(20),
+}).superRefine((d, ctx) => {
+  const n = normalizarDocumento(d.numeroDocumento);
+  if (d.tipoDocumento) revisarDocumento({ tipoDocumento: d.tipoDocumento, numeroDocumento: n }, ctx);
+  else if (!/^[A-Z0-9]{8,12}$/.test(n)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['numeroDocumento'], message: 'Documento inválido (8 a 12 letras o números)' });
+});
+const motivo = z.string().trim().max(300).optional().nullable();
+const meta = (req: Request) => ({ ip: req.ip, userAgent: req.headers['user-agent'] as string | undefined });
 
 export function crearApiReservas(o: { scope: string; canal: 'web' | 'whatsapp' }): Router {
   const router = Router();
@@ -61,6 +82,9 @@ export function crearApiReservas(o: { scope: string; canal: 'web' | 'whatsapp' }
   });
   const limiteConsultas = limite(240, 'Demasiadas consultas. Espera un minuto.');
   const limiteReservas = limite(30, 'Demasiadas reservas en un minuto. Espera un momento.');
+  // Buscar citas por DOCUMENTO y cancelar/reprogramar: límites cortos, para frenar a quien pruebe documentos ajenos.
+  const limiteBusqueda = limite(20, 'Demasiadas búsquedas en un minuto. Espera un momento.');
+  const limiteCambios = limite(10, 'Demasiados cambios en un minuto. Espera un momento.');
 
   router.use(requireAuth, exigirLlave);
 
@@ -92,8 +116,66 @@ export function crearApiReservas(o: { scope: string; canal: 'web' | 'whatsapp' }
     res.status(r.repetida ? 200 : 201).json(publico);
   });
 
+  // ─── Mis citas, cancelar y reprogramar (16-nov-2026). Reglas en services/reservaWeb/gestion.ts ───────────────────
+  router.get('/citas-paciente', limiteBusqueda, async (req, res) => {
+    res.json({ citas: await citasProximas(zDocumento.parse(req.query)) });
+  });
+
+  // ─── Rutas AGRUPADAS para el agente de GHL (16-nov-2026) — solo la API de WhatsApp ───────────────────────────────
+  // GHL deja 5 acciones «Llamada a API» por agente: con estas dos (más POST /) Ana usa 3. Hacen lo mismo que las rutas sueltas
+  // (mismas funciones, reglas y límites); las sueltas siguen funcionando. Van ANTES de GET /:codigo.
+  if (canal === 'whatsapp') {
+    const consultaSchema = z.discriminatedUnion('que', [
+      z.object({ que: z.literal('catalogo') }),
+      z.object({ que: z.literal('dias'), sedeId: uuid, servicioId: uuid, desde: fecha, hasta: fecha }),
+      z.object({ que: z.literal('horas'), sedeId: uuid, servicioId: uuid, fecha }),
+      z.object({ que: z.literal('reserva'), codigo: z.string().trim().min(6).max(40) }),
+      z.object({ que: z.literal('citas'), numeroDocumento: z.string(), tipoDocumento: z.enum(TIPOS_DOCUMENTO_RESERVA).optional().nullable() }),
+    ], { errorMap: () => ({ message: 'Indica qué consultar: que=catalogo, dias, horas, reserva o citas' }) });
+    // «Mis citas» busca por documento: lleva el límite corto de búsquedas (como la ruta suelta).
+    const limiteSiBuscaCitas = (req: Request, res: Response, next: NextFunction) => (req.query.que === 'citas' ? limiteBusqueda(req, res, next) : next());
+
+    router.get('/consultar', limiteSiBuscaCitas, limiteConsultas, async (req, res) => {
+      const q = consultaSchema.parse(req.query);
+      switch (q.que) {
+        case 'catalogo': res.json(await catalogo()); return;
+        case 'dias': res.json({ dias: await diasDisponibles(q.sedeId, q.servicioId, q.desde, q.hasta) }); return;
+        case 'horas': {
+          const hc = await horasConCupos(q.sedeId, q.servicioId, q.fecha);
+          res.json({ fecha: q.fecha, horas: hc.map((h) => h.hora), cupos: Object.fromEntries(hc.map((h) => [h.hora, h.cupos])) });
+          return;
+        }
+        case 'reserva': res.json(await estadoReservaPorCodigo(q.codigo, canal)); return;
+        case 'citas': res.json({ citas: await citasProximas(zDocumento.parse(q)) }); return;
+      }
+    });
+
+    const codigoCambio = z.string().trim().min(1, 'Indica el código de la cita').max(60);
+    const cambioSchema = z.discriminatedUnion('accion', [
+      z.object({ accion: z.literal('cancelar'), codigo: codigoCambio, numeroDocumento: z.string(), tipoDocumento: z.enum(TIPOS_DOCUMENTO_RESERVA).optional().nullable(), motivo }),
+      z.object({ accion: z.literal('reprogramar'), codigo: codigoCambio, numeroDocumento: z.string(), tipoDocumento: z.enum(TIPOS_DOCUMENTO_RESERVA).optional().nullable(), fecha, horaInicio: hora }),
+    ], { errorMap: () => ({ message: 'Indica la acción: accion=cancelar o reprogramar' }) });
+
+    router.post('/cambiar', limiteCambios, async (req, res) => {
+      const b = cambioSchema.parse(req.body ?? {});
+      const doc = zDocumento.parse(b);
+      if (b.accion === 'cancelar') { res.json(await cancelarCitaChat(b.codigo, doc, canal, b.motivo || null, meta(req))); return; }
+      res.status(201).json(await reprogramarCitaChat(b.codigo, doc, canal, b.fecha, b.horaInicio, meta(req)));
+    });
+  }
+
   router.get('/:codigo', limiteConsultas, async (req, res) => {
     res.json(await estadoReservaPorCodigo(String(req.params.codigo), canal));
+  });
+
+  router.post('/:codigo/cancelar', limiteCambios, async (req, res) => {
+    const b = zDocumento.and(z.object({ motivo })).parse(req.body ?? {});
+    res.json(await cancelarCitaChat(String(req.params.codigo), b, canal, b.motivo || null, meta(req)));
+  });
+
+  router.post('/:codigo/reprogramar', limiteCambios, async (req, res) => {
+    const b = zDocumento.and(z.object({ fecha, horaInicio: hora })).parse(req.body ?? {});
+    res.status(201).json(await reprogramarCitaChat(String(req.params.codigo), b, canal, b.fecha, b.horaInicio, meta(req)));
   });
 
   return router;
