@@ -223,7 +223,7 @@ export async function citasProximas(d: DocumentoPaciente) {
 }
 
 /** La cita (id o «LB-…»), solo si es de ese paciente (si no, 404 igual que si no existiera). */
-async function citaDelPaciente(ref: string, d: DocumentoPaciente) {
+export async function citaDelPaciente(ref: string, d: DocumentoPaciente) {
   const [cita, paciente] = await Promise.all([citaPorReferencia(ref), pacienteDe(d)]);
   if (!cita || !paciente || cita.pacienteId !== paciente.id) throw new AppError('Reserva no encontrada', 404, 'RESERVA_NO_ENCONTRADA');
   return cita;

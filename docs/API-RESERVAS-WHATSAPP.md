@@ -258,6 +258,46 @@ GHL deja solo **5 acciones «Llamada a API» por agente**. Estas dos rutas reún
 
 Una combinación inválida (por ejemplo `que=horas` sin `fecha`, o una `accion` desconocida) responde `422` con el campo que falta.
 
+### 3.10 Servidor MCP para Ana (17-nov-2026)
+Lo mismo de esta API, como **servidor MCP** (sin el tope de 5 acciones de GHL y con la respuesta completa para Ana):
+- **URL:** `POST https://limablueagenda.com/api/v1/mcp` — MCP «Streamable HTTP» **sin sesión** (JSON-RPC 2.0: `initialize`, `tools/list`,
+  `tools/call`). Cabeceras: `Authorization: ApiKey <llave>`, `Content-Type: application/json`, `Accept: application/json, text/event-stream`.
+- **Llave:** la misma de WhatsApp. El canal lo fija la llave (como en las rutas REST). Sin llave: `401`; llave sin permiso de reservas: `403`.
+- **Mismas reglas y límites por llave** que las rutas REST (240 consultas por minuto en total, 30 reservas, 20 búsquedas por documento y
+  10 cambios —cancelar, reprogramar, nota y extender pago—). Las rutas REST siguen funcionando igual.
+- **Errores:** la herramienta responde con `isError: true` y el texto `{ "error": "mensaje", "code": "CODIGO", "status": 409 }` (los códigos
+  de la sección 5 y de la tabla de 3.8). Si los argumentos no cumplen el esquema, el texto empieza con `MCP error -32602` y dice qué campo falta.
+
+| Herramienta | Argumentos | Equivale a |
+|---|---|---|
+| `consultar_catalogo` | — | `GET /catalogo` |
+| `info_sede` | — | **Nueva:** dirección y horario de atención por día de cada sede |
+| `dias_disponibles` | `sedeId`, `servicioId`, `desde`, `hasta` | `GET /dias` |
+| `horas_del_dia` | `sedeId`, `servicioId`, `fecha` | `GET /horas` (con `cupos`) |
+| `buscar_cupo` | `servicioId`, `fecha`, `sedeId?` (preferida), `subcategoriaId?` | **Nueva** (abajo) |
+| `reservar_cita` | los de `POST /` (`aceptaDatos: true`, `referencia?`) | `POST /` |
+| `estado_reserva` | `codigo` (`LB-…`) | `GET /:codigo` |
+| `mis_citas` | `numeroDocumento`, `tipoDocumento?` | `GET /citas-paciente` |
+| `cancelar_cita` | `codigo`, `numeroDocumento`, `motivo?` | `POST /{codigo}/cancelar` |
+| `reprogramar_cita` | `codigo`, `numeroDocumento`, `fecha`, `horaInicio` | `POST /{codigo}/reprogramar` (la cita se mueve) |
+| `agregar_nota_cita` | `codigo`, `numeroDocumento`, `texto` (3 a 500) | **Nueva:** nota para recepción en la cita («llegaré 10 min tarde») |
+| `extender_pago` | `codigo` (`LB-…`), `numeroDocumento` | **Nueva:** 10 minutos más para pagar, una sola vez |
+
+`codigo` en cancelar, reprogramar y nota = lo que da `mis_citas` (`LB-…` o el id de la cita).
+
+**`buscar_cupo`**: todas las sedes que ofrecen ese servicio (y ese tipo, si se indica), la preferida primero; una sede sin cupo sale con
+`horas: []`. Si ninguna tiene cupo ese día, `diaCercano` = el siguiente día con cupo dentro de 14 días, en cualquier sede:
+```json
+{ "fecha": "2026-11-21", "servicio": "Limpieza Clínica del Pie", "hayCupo": false,
+  "sedes": [ { "sedeId": "…", "sede": "One", "preferida": true, "precio": 90, "horas": [], "cupos": {} },
+             { "sedeId": "…", "sede": "Lince", "preferida": false, "precio": 87, "horas": [], "cupos": {} } ],
+  "diaCercano": { "fecha": "2026-11-22", "sedeId": "…", "sede": "Lince", "horas": ["09:00", "10:30"] } }
+```
+**`agregar_nota_cita`**: queda en el hilo de comentarios de la cita como «Paciente (WhatsApp · Ana)» (recepción la ve al instante). Solo en
+citas vigentes (`NO_VIGENTE` si ya se canceló o se atendió); un código que no es de ese documento: `RESERVA_NO_ENCONTRADA`.
+**`extender_pago`**: solo reservas de esta API en `esperando_pago` y sin vencer. Errores: `NO_ESPERA_PAGO`, `PAGO_VENCIDO` (reservar de
+nuevo), `YA_EXTENDIDO`.
+
 ## 4. Reintentos sin duplicar (`referencia`)
 Si la llamada `POST /` se corta (tiempo de espera, caída de red) y no saben si se creó, **repitan exactamente la misma petición con la
 misma `referencia`**: devuelve la reserva ya creada (`200`, `"repetida": true`) en vez de crear otra cita. Usen una `referencia`
@@ -280,6 +320,8 @@ Los mensajes (`message`, `mensaje`) están en español y se pueden **mostrar tal
 | 400 | `FECHA_PASADA` / `FECHA_MUY_LEJANA` | Fecha fuera del rango reservable |
 | 409 | `HORA_NO_DISPONIBLE` | Esa hora ya se ocupó: ofrecer otra |
 | 502 | `PAGO_NO_DISPONIBLE` | Sábado o domingo: la tienda no respondió al preparar el pago. No se creó nada |
+| 409 | `NO_ESPERA_PAGO` / `PAGO_VENCIDO` / `YA_EXTENDIDO` | MCP `extender_pago` (§3.10) |
+| 400 | `NOTA_VACIA` | MCP `agregar_nota_cita`: nota de menos de 3 letras |
 | 422 | `VALIDATION_ERROR` | Datos mal escritos (documento, celular, correo, falta `aceptaDatos`…) |
 | 404 | `RESERVA_NO_ENCONTRADA` | El código no existe, se hizo con la otra API o (3.8) el documento no es del dueño de la cita |
 | 409 | `FUERA_DE_PLAZO` / `REQUIERE_ASESOR` / `ESPERANDO_PAGO` / `NO_SE_PUEDE_CANCELAR` / `NO_VIGENTE` | Cancelar/reprogramar: ver la tabla de 3.8 (Ana deriva a un asesor) |
